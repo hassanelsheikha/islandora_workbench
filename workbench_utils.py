@@ -1494,10 +1494,6 @@ def check_input(config, args):
         if 'parent_id' in csv_column_headers:
             validate_parent_ids_precede_children_csv_data = get_csv_data(config)
             validate_parent_ids_precede_children(config, validate_parent_ids_precede_children_csv_data)
-            if config['query_csv_id_to_node_id_map_for_parents'] is True:
-                prepare_csv_id_to_node_id_map(config)
-                validate_parent_ids_in_csv_id_to_node_id_map_csv_data = get_csv_data(config)
-                validate_parent_ids_in_csv_id_to_node_id_map(config, validate_parent_ids_in_csv_id_to_node_id_map_csv_data)
 
         # Specific to creating aggregated content such as collections, compound objects and paged content. Currently, if 'parent_id' is present
         # in the CSV file 'field_member_of' is mandatory.
@@ -3061,6 +3057,18 @@ def create_media(config, filename, file_fieldname, node_id, csv_row, media_use_t
                  it doesn't have sufficient information to create the media, or None
                  if config['nodes_only'] is True.
     """
+    def get_node_media_from_nid(config, node_id):
+        """Get node field_islandora_object_media from Drupal.
+
+        """
+        node_url = config['host'] + '/node/' + node_id + '?_format=json'
+        node_response = issue_request(config, 'GET', node_url)
+        if node_response.status_code == 200:
+            node_dict = json.loads(node_response.text)
+            return node_dict['field_islandora_object_media']
+        else:
+            return False
+        
     if config['nodes_only'] is True:
         return
 
@@ -3156,10 +3164,6 @@ def create_media(config, filename, file_fieldname, node_id, csv_row, media_use_t
                 media_field: [{
                     "value": filename
                 }],
-                "field_media_of": [{
-                    "target_id": int(node_id),
-                    "target_type": 'node'
-                }],
                 "field_media_use": [{
                     "target_id": media_use_tids[0],
                     "target_type": 'taxonomy_term'
@@ -3181,10 +3185,6 @@ def create_media(config, filename, file_fieldname, node_id, csv_row, media_use_t
                 media_field: [{
                     "target_id": file_result,
                     "target_type": 'file'
-                }],
-                "field_media_of": [{
-                    "target_id": int(node_id),
-                    "target_type": 'node'
                 }],
                 "field_media_use": [{
                     "target_id": media_use_tids[0],
@@ -3345,7 +3345,7 @@ def create_media(config, filename, file_fieldname, node_id, csv_row, media_use_t
                 media_track_field_data[0]['default'] = True
                 media_json[media_track_field_name_parts[2]] = media_track_field_data
 
-        media_endpoint_path = '/entity/media'
+        media_endpoint_path = '/entity/media?_format=json' if config['standalone_media_url']  else '/entity/media'
         media_headers = {
             'Content-Type': 'application/json'
         }
@@ -3364,6 +3364,40 @@ def create_media(config, filename, file_fieldname, node_id, csv_row, media_use_t
                 else:
                     logging.error("Could not PATCH additional media use terms to media created from '%s' because media ID is not available.", filename)
 
+            media_response_body = json.loads(media_response.text)
+            if 'mid' in media_response_body:
+                media_id = media_response_body['mid'][0]['value']
+                patch_media_use_terms(config, media_id, media_type, media_use_tids)
+            else:
+                logging.error("Could not PATCH additional media use terms to media created from '%s' because media ID is not available.", filename)
+
+            
+            node_media_json = {
+                    'type': [
+                        {'target_id': "islandora_object"}
+                    ],
+                    'field_islandora_object_media': [
+                        {
+                            'target_id': media_id,
+                            'target_type': "media"
+
+                        }
+                    ]
+                }
+            
+            # If append_media is True
+            if "append_media" in config and config["append_media"] == True:
+                node_media_list = get_node_media_from_nid(config, csv_row['node_id'])
+
+                if len(node_media_list) > 0:
+                    current_media = {"target_id": media_id, "target_type": 'media'}
+                    node_media_list.append(current_media)
+                    node_media_json['field_islandora_object_media'] = node_media_list
+
+            node_endpoint = config['host'] + '/node/' + csv_row['node_id'] + '?_format=json'
+            node_headers = {'Content-Type': 'application/json'}
+            node_response = issue_request(config, 'PATCH', node_endpoint, node_headers, node_media_json)
+            
             # Execute media-specific post-create scripts, if any are configured.
             if 'media_post_create' in config and len(config['media_post_create']) > 0:
                 for command in config['media_post_create']:
@@ -4965,32 +4999,6 @@ def validate_parent_ids_precede_children(config, csv_data):
                 sys.exit('Error: ' + message)
 
 
-def validate_parent_ids_in_csv_id_to_node_id_map(config, csv_data):
-    """Query the CSV ID to node ID map to check for non-unique parent IDs. If they exist,
-       report out but do not exit.
-    """
-    id_field = config['id_field']
-    if config['query_csv_id_to_node_id_map_for_parents'] is True:
-        # First, confirm the databae exists; if not, tell the user and exit.
-        if not os.path.exists(config['csv_id_to_node_id_map_path']):
-            message = f"Can't find CSV ID to node ID database path at {config['csv_id_to_node_id_map_path']}."
-            logging.error(message)
-            sys.exit('Error: ' + message)
-
-        # If database exists, query it.
-        id_field = config['id_field']
-        parents_from_id_map = []
-        for row in csv_data:
-            query = "select * from csv_id_to_node_id_map where parent_csv_id = ?"
-            parent_in_id_map_result = sqlite_manager(config, operation='select', query=query, values=(row[id_field],), db_file_path=config['csv_id_to_node_id_map_path'])
-            for parent_in_id_map_row in parent_in_id_map_result:
-                parents_from_id_map.append(parent_in_id_map_row['node_id'].strip())
-            if len(parents_from_id_map) > 1:
-                message = f'Query of ID map for parent ID "{row["parent_id"]}" returned multiple node IDs: ({", ".join(parents_from_id_map)}).'
-                logging.warning(message)
-                print("Warning: " + message)
-
-
 def validate_taxonomy_field_values(config, field_definitions, csv_data):
     """Loop through all fields in field_definitions, and if a field
        is a taxonomy reference field, validate all values in the CSV
@@ -6486,6 +6494,63 @@ def serialize_field_json(config, field_definitions, field_name, field_data):
     return csv_field_data
 
 
+def prep_parent_node_ids_map(config):
+    """Create a database table where we maintain the CSV ID->nid map in write_to_parent_node_ids_map().
+       Used in secondary tasks to create parent/child references.
+    """
+    if os.environ.get('ISLANDORA_WORKBENCH_PRIMARY_TASK_TEMP_DIR') is not None:
+        path_to_db = os.path.join(os.environ["ISLANDORA_WORKBENCH_PRIMARY_TASK_TEMP_DIR"], config['sqlite_db_filename'])
+    else:
+        path_to_db = os.path.join(config['temp_dir'], config['sqlite_db_filename'])
+
+    table = "csv_row_id_to_parent_node_id_map"
+    create_table_sql = "CREATE TABLE csv_row_id_to_parent_node_id_map (csv_row_id TEXT, node_id TEXT)"
+    sqlite_manager(config, operation='create_table', table_name=table, query=create_table_sql, db_file_path=path_to_db)
+
+
+
+def write_to_parent_node_ids_map(config, row_id, node_id):
+    """Inserts an entry into the SQLite table tracking the CSV->node ID mappings
+       used in secondary tasks to create parent/child references.
+    """
+    if os.environ.get('ISLANDORA_WORKBENCH_PRIMARY_TASK_TEMP_DIR') is not None:
+        path_to_db = os.path.join(os.environ["ISLANDORA_WORKBENCH_PRIMARY_TASK_TEMP_DIR"], config['sqlite_db_filename'])
+    else:
+        path_to_db = os.path.join(config['temp_dir'], config['sqlite_db_filename'])
+
+    sqlite_manager(config, operation='insert', query="INSERT INTO csv_row_id_to_parent_node_id_map VALUES (?, ?)", values=(str(row_id), str(node_id)), db_file_path=path_to_db)
+
+
+def read_parent_node_ids_map(config):
+    """Gets all of the CSV ID->node ID mappings used in secondary tasks to create parent/child references.
+    """
+    map = dict()
+    if os.environ.get('ISLANDORA_WORKBENCH_PRIMARY_TASK_TEMP_DIR') is not None:
+        path_to_db = os.path.join(os.environ["ISLANDORA_WORKBENCH_PRIMARY_TASK_TEMP_DIR"], config['sqlite_db_filename'])
+    else:
+        path_to_db = os.path.join(config['temp_dir'], config['sqlite_db_filename'])
+
+    if config['secondary_tasks'] is not None:
+        if not os.path.exists(path_to_db):
+            message = f'Secondary task database "{path_to_db}" not found.'
+            print('Error: ' + message)
+            logging.error(message)
+            return map
+            sys.exit()
+
+    if os.path.exists(path_to_db):
+        res = sqlite_manager(config, operation='select', query="SELECT * FROM csv_row_id_to_parent_node_id_map", db_file_path=path_to_db)
+        map = dict()
+        # Note: since we don't enforce uniquness of CSV IDs across tasks, it is possible that a given
+        # CSV ID can exist multiple times in the map table. In practice this shouldn't be a problem,
+        # since by iterating over them and adding them to the 'map' dictionary, the newest usage of
+        # the CSV ID will end up being the one used.
+        for row in res:
+            map[row['csv_row_id']] = row['node_id']
+
+    return map
+
+
 def csv_subset_warning(config):
     """Create a message indicating that the csv_start_row and csv_stop_row config
        options are present and that a subset of the input CSV will be used.
@@ -7027,29 +7092,21 @@ def sqlite_manager(config, operation='select', table_name=None, query=None, valu
                 logging.warning(f'SQLite database "{db_path}" already contains a table named "{table_name}".')
             return False
     elif operation == 'select':
-        try:
-            con = sqlite3.connect(db_path)
-            con.row_factory = sqlite3.Row
-            cur = con.cursor()
-            res = cur.execute(query, values).fetchall()
-            con.close()
-            return res
-        except sqlite3.OperationalError as e:
-            logging.error(f'Error executing SQLite query against database at {db_path}: {e}')
-            sys.exit(f'Error executing SQLite query against database at {db_path}: {e}')
+        con = sqlite3.connect(db_path)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        res = cur.execute(query, values).fetchall()
+        con.close()
+        return res
     else:
         # 'insert', 'update', 'delete' queries.
-        try:
-            con = sqlite3.connect(db_path)
-            con.row_factory = sqlite3.Row
-            cur = con.cursor()
-            res = cur.execute(query, values)
-            con.commit()
-            con.close()
-            return res
-        except sqlite3.OperationalError as e:
-            logging.error(f'Error executing SQLite query against database at {db_path}: {e}')
-            sys.exit(f'Error executing SQLite query against database at {db_path}: {e}')
+        con = sqlite3.connect(db_path)
+        con.row_factory = sqlite3.Row
+        cur = con.cursor()
+        res = cur.execute(query, values)
+        con.commit()
+        con.close()
+        return res
 
 
 def prepare_csv_id_to_node_id_map(config):
