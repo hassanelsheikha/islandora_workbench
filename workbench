@@ -497,7 +497,7 @@ def update():
                     ],
                     "revision_log": [
                         {
-                        "value": "Updated by Islandora Workbench."
+                        "value": revision_log_message
                         }
                     ],
                 }
@@ -1171,6 +1171,26 @@ def update_media() -> None:
                     row_position = get_percentage(row_count, num_csv_records)
                     pbar(row_position)
                 continue
+
+        # Create a revision
+        revision_json = {
+                    "type": [
+                        {
+                        "target_id": "islandora_object",
+                        "target_type": "node_type"
+                        }
+                    ],
+                    "title": [
+                        {
+                        "value": "Updated by Islandora Workbench"
+                        }
+                    ],
+                    "revision_log": [
+                        {
+                        "value": "Updated by Islandora Workbench."
+                        }
+                    ],
+                }
 
         # Make the PATCH request
         if config['standalone_media_url'] is True:
