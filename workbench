@@ -484,17 +484,6 @@ def update():
             # Add revision information to node
             revision_log_message = row['revision_log_message'] if 'revision_log_message' in row else 'Updated by Islandora Workbench.'
             revision_json = {
-                    "type": [
-                        {
-                        "target_id": "islandora_object",
-                        "target_type": "node_type"
-                        }
-                    ],
-                    "title": [
-                        {
-                        "value": "Updated by Islandora Workbench"
-                        }
-                    ],
                     "revision_log": [
                         {
                         "value": revision_log_message
@@ -1172,25 +1161,16 @@ def update_media() -> None:
                     pbar(row_position)
                 continue
 
-        # Create a revision
+        # Create a revision log message
+        revision_log_message = row['revision_log_message'] if 'revision_log_message' in row else 'Updated by Islandora Workbench.'
         revision_json = {
-                    "type": [
-                        {
-                        "target_id": "islandora_object",
-                        "target_type": "node_type"
-                        }
-                    ],
-                    "title": [
-                        {
-                        "value": "Updated by Islandora Workbench"
-                        }
-                    ],
                     "revision_log": [
                         {
-                        "value": "Updated by Islandora Workbench."
+                        "value": revision_log_message
                         }
                     ],
                 }
+        patch_request_json.update(revision_json)
 
         # Make the PATCH request
         if config['standalone_media_url'] is True:
