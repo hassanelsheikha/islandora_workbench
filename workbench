@@ -906,7 +906,7 @@ def update_media() -> None:
             ]
         }
 
-    def patch_media_use_terms_update_media(media_use_tids):
+    def patch_media_use_terms_update_media(media_use_tids: list) -> dict:
         """Return the JSON object for a PATCH request required to patch the media entity's media use terms.
            Note: workbench_utils has its own patch_media_use_terms().
 
@@ -940,6 +940,36 @@ def update_media() -> None:
                 {'value': status}
             ]
         }
+    
+    def is_revisions_enabled(config: dict, media_type: str) -> bool:
+        """Return True if the media type has revisions enabled, False otherwise.
+
+        Parameters:
+            - config: The global configuration object.
+            - media_type: The media entity's type (e.g., 'image').
+
+        Returns:
+            True if the media type has revisions enabled, False otherwise.
+        """
+        media_type_endpoint = f"{config['host']}/entity/media_type/{media_type}/?_format=json"
+        response = issue_request(config, 'GET', media_type_endpoint).text
+        return json.loads(response)['new_revision']
+    
+    def patch_media_revision_log_message(revision_log_message) -> dict:
+        """Return the JSON object for a PATCH request required to patch the media entity's revision log message.
+
+        Parameters:
+            - revision_log_message: The revision log message.
+
+        Returns:
+            The JSON request for a PATCH request required to patch the media entity's revision log message.
+        """
+        return {
+            'revision_log_message': [
+                {'value': revision_log_message}
+            ]
+        }
+
     # ========================================================= Main Logic =========================================================
 
     # TODO: Updating the media file and the name simultaneously does not work. The media takes the name of the new file and not the specified name.
@@ -1167,22 +1197,10 @@ def update_media() -> None:
                     pbar(row_position)
                 continue
 
-        # Make a GET request to the media type
-        media_type_endpoint = f"{config['host']}/entity/media_type/{media_type}/?_format=json"
-        response = issue_request(config, 'GET', media_type_endpoint).text
-        # See if revisions are enabled for the content type and create a new revision log message if so
-        revisions_enabled = json.loads(response)['new_revision']
-        if revisions_enabled:
-            # Create a revision log message
+        # Update revision log message
+        if is_revisions_enabled(config, media_type):
             revision_log_message = row['revision_log_message'] if 'revision_log_message' in row else 'Updated by Islandora Workbench.'
-            revision_json = {
-                        "revision_log_message": [
-                            {
-                                "value": revision_log_message
-                            }
-                        ]
-                    }
-            patch_request_json.update(revision_json)
+            patch_request_json.update(patch_media_revision_log_message(revision_log_message))
 
         # Make the PATCH request
         if config['standalone_media_url'] is True:
